@@ -6,14 +6,18 @@
 """
 
 import os
+import re
 import cairosvg
 import dtreeviz
 import warnings
 import numpy as np
 import pandas as pd
+import matplotlib.pyplot as plt
 from openpyxl.utils import get_column_letter, column_index_from_string
 
+import toad
 import category_encoders as ce
+from optbinning import OptimalBinning
 from sklearn.preprocessing import LabelEncoder
 from sklearn.tree import _tree, DecisionTreeClassifier, plot_tree, export_graphviz
 
@@ -36,12 +40,15 @@ class ParseDecisionTreeRules:
         self.max_iter = max_iter
         self.output = output
         self.decision_trees = []
+        self.combiner = toad.transform.Combiner()
         self.target_enc = None
         self.feature_names = None
         self.dt_rules = pd.DataFrame()
         self.end_row = 2
         self.start_col = 2
         self.describe_columns = ["组合策略", "命中数", "命中率", "好样本数", "好样本占比", "坏样本数", "坏样本占比", "坏率", "样本整体坏率", "LIFT值"]
+        
+        self.init_setting(font_path=os.path.join(os.path.dirname(os.path.abspath(__file__)), 'matplot_chinese.ttf'))
         
         if output:
             if writer:
@@ -50,6 +57,21 @@ class ParseDecisionTreeRules:
                 self.writer = ExcelWriter(theme_color="2639E9")
             
             self.worksheet = self.writer.get_sheet_by_name("决策树组合策略挖掘")
+    
+    @staticmethod
+    def init_setting(font_path=None):
+        import matplotlib
+        
+        pd.options.display.float_format = '{:.4f}'.format
+        pd.set_option('display.max_colwidth', 300)
+        plt.style.use('seaborn-ticks')
+        if font_path:
+            from matplotlib import font_manager
+            matplotlib.font_manager.fontManager.addfont(font_path)
+            matplotlib.rcParams['font.family'] = font_manager.FontProperties(fname=font_path).get_name()
+        else:
+            matplotlib.rcParams['font.family'] = ["KaiTi"]
+        matplotlib.rcParams['axes.unicode_minus'] = False
     
     def encode_cat_features(self, X, y):
         cat_features = list(set(X.select_dtypes(include=[object, pd.CategoricalDtype]).columns))
@@ -280,8 +302,176 @@ class ParseDecisionTreeRules:
     
     def save(self):
         self.writer.save(self.output)
+    
+    @staticmethod
+    def feature_bins(bins):
+        if isinstance(bins, list): bins = np.array(bins)
+        EMPTYBINS = len(bins) if not isinstance(bins[0], (set, list, np.ndarray)) else -1
         
-       
+        l = []
+        if np.issubdtype(bins.dtype, np.number):
+            has_empty = len(bins) > 0 and np.isnan(bins[-1])
+            if has_empty: bins = bins[:-1]
+            sp_l = ["负无穷"] + bins.tolist() + ["正无穷"]
+            for i in range(len(sp_l) - 1): l.append('['+str(sp_l[i])+' , '+str(sp_l[i+1])+')')
+            if has_empty: l.append('缺失值')
+        else:
+            for keys in bins:
+                keys_update = set()
+                for key in keys:
+                    if pd.isnull(key) or key == "nan":
+                        keys_update.add("缺失值")
+                    elif key.strip() == "":
+                        keys_update.add("空字符串")
+                    else:
+                        keys_update.add(key)
+                label = ','.join(keys_update)
+                l.append(label)
+
+        return {i if b != "缺失值" else EMPTYBINS: b for i, b in enumerate(l)}
+    
+    def feature_bin_stats(self, data, feature, rules={}, min_n_bins=2, max_n_bins=3, max_n_prebins=10, min_prebin_size=0.02, min_bin_size=0.05, max_bin_size=None, gamma=0.01, monotonic_trend="auto_asc_desc", desc="", method='chi', verbose=0, combiner=None, ks=False):
+        if method not in ['dt', 'chi', 'quantile', 'step', 'kmeans', 'cart']:
+            raise "method is the one of ['dt', 'chi', 'quantile', 'step', 'kmeans', 'cart']"
+        
+        if data[feature].dropna().nunique() <= min_n_bins:
+            splits = []
+            for v in data[feature].dropna().unique():
+                splits.append(v)
+
+            if str(data[feature].dtypes) in ["object", "string", "category"]:
+                rule = {feature: [[s] for s in splits]}
+                rule[feature].append([[np.nan]])
+            else:
+                rule = {feature: sorted(splits) + [np.nan]}
+        else:
+            if method == "cart":
+                y = data[self.target]
+                if str(data[feature].dtypes) in ["object", "string", "category"]:
+                    dtype = "categorical"
+                    x = data[feature].astype("category").values
+                else:
+                    dtype = "numerical"
+                    x = data[feature].values
+
+                _combiner = OptimalBinning(feature, dtype=dtype, min_n_bins=min_n_bins, max_n_bins=max_n_bins, max_n_prebins=max_n_prebins, min_prebin_size=min_prebin_size, min_bin_size=min_bin_size, max_bin_size=max_bin_size, monotonic_trend=monotonic_trend, gamma=gamma).fit(x, y)
+                if _combiner.status == "OPTIMAL":
+                    rule = {feature: [s.tolist() if isinstance(s, np.ndarray) else s for s in _combiner.splits] + [[np.nan] if dtype == "categorical" else np.nan]}
+                else:
+                    _combiner = toad.transform.Combiner()
+                    _combiner.fit(data[[feature, self.target]].dropna(), self.target, method="chi", min_samples=min_bin_size, n_bins=max_n_bins)
+                    rule = {feature: [s.tolist() if isinstance(s, np.ndarray) else s for s in _combiner[feature]] + [[np.nan] if dtype == "categorical" else np.nan]}
+            else:
+                _combiner = toad.transform.Combiner()
+                if method in ("step", "quantile"):
+                    _combiner.fit(data[[feature, self.target]].dropna(), self.target, method=method, n_bins=max_n_bins)
+                else:
+                    _combiner.fit(data[[feature, self.target]].dropna(), self.target, method=method, min_samples=min_bin_size, n_bins=max_n_bins)
+                rule = {feature: [s.tolist() if isinstance(s, np.ndarray) else s for s in _combiner[feature]] + [[np.nan] if str(data[feature].dtypes) in ["object", "string", "category"] else np.nan]}
+        
+        self.combiner.update(rule)
+        
+        if verbose > 0:
+            print(data[feature].describe())
+
+        if rules and isinstance(rules, list): rules = {feature: rules}
+        if rules and isinstance(rules, dict): self.combiner.update(rules)
+
+        feature_bin = self.combiner[feature]
+        feature_bin_dict = self.feature_bins(np.array(feature_bin))
+        
+        df_bin = self.combiner.transform(data[[feature, self.target]], labels=False)
+        
+        table = df_bin[[feature, self.target]].groupby([feature, self.target]).agg(len).unstack()
+        table.columns.name = None
+        table = table.rename(columns = {0 : '好样本数', 1 : '坏样本数'}).fillna(0)
+        if "好样本数" not in table.columns:
+            table["好样本数"] = 0
+        if "坏样本数" not in table.columns:
+            table["坏样本数"] = 0
+        
+        table["指标名称"] = feature
+        table["指标含义"] = desc
+        table = table.reset_index().rename(columns={feature: "分箱", "index": "分箱"})
+
+        table['样本总数'] = table['好样本数'] + table['坏样本数']
+        table['样本占比'] = table['样本总数'] / table['样本总数'].sum()
+        table['好样本占比'] = table['好样本数'] / table['好样本数'].sum()
+        table['坏样本占比'] = table['坏样本数'] / table['坏样本数'].sum()
+        table['坏样本率'] = table['坏样本数'] / table['样本总数']
+        
+        table = table.fillna(0.)
+        
+        table['分档WOE值'] = table.apply(lambda x : np.log(x['好样本占比'] / (x['坏样本占比'] + 1e-6)),axis=1)
+        table['分档IV值'] = table.apply(lambda x : (x['好样本占比'] - x['坏样本占比']) * np.log(x['好样本占比'] / (x['坏样本占比'] + 1e-6)), axis=1)
+        
+        table = table.replace(np.inf, 0).replace(-np.inf, 0)
+        
+        table['指标IV值'] = table['分档IV值'].sum()
+        
+        table["LIFT值"] = table['坏样本率'] / (table["坏样本数"].sum() / table["样本总数"].sum())
+        table["累积LIFT值"] = (table['坏样本数'].cumsum() / table['样本总数'].cumsum()) / (table["坏样本数"].sum() / table["样本总数"].sum())
+        
+        if ks:
+            table = table.sort_values("分箱")
+            table["累积好样本数"] = table["好样本数"].cumsum()
+            table["累积坏样本数"] = table["坏样本数"].cumsum()
+            table["分档KS值"] = table["累积坏样本数"] / table['坏样本数'].sum() - table["累积好样本数"] / table['好样本数'].sum()
+        
+        table["分箱"] = table["分箱"].map(feature_bin_dict)
+        table = table.set_index(['指标名称', '指标含义', '分箱']).reindex([(feature, desc, b) for b in feature_bin_dict.values()]).fillna(0).reset_index()
+        
+        if ks:
+            return table[['指标名称', "指标含义", '分箱', '样本总数', '样本占比', '好样本数', '好样本占比', '坏样本数', '坏样本占比', '坏样本率', '分档WOE值', '分档IV值', '指标IV值', 'LIFT值', '累积LIFT值', '累积好样本数', '累积坏样本数', '分档KS值']]
+        else:
+            return table[['指标名称', "指标含义", '分箱', '样本总数', '样本占比', '好样本数', '好样本占比', '坏样本数', '坏样本占比', '坏样本率', '分档WOE值', '分档IV值', '指标IV值', 'LIFT值', '累积LIFT值']]
+
+    @staticmethod
+    def bin_plot(feature_table, desc="", figsize=(10, 6), colors=["#2639E9", "#F76E6C", "#FE7715"], max_len=35, save=None):
+        feature_table = feature_table.copy()
+
+        feature_table["分箱"] = feature_table["分箱"].apply(lambda x: x if re.match("^\[.*\)$", x) else str(x)[:max_len] + "..")
+
+        fig, ax1 = plt.subplots(figsize=figsize)
+        ax1.barh(feature_table['分箱'], feature_table['好样本数'], color=colors[0], label='好样本', hatch="/")
+        ax1.barh(feature_table['分箱'], feature_table['坏样本数'], left=feature_table['好样本数'], color=colors[1], label='坏样本', hatch="\\")
+        ax1.set_xlabel('样本数')
+
+        ax2 = ax1.twiny()
+        ax2.plot(feature_table['坏样本率'], feature_table['分箱'], colors[2], label='坏样本率', linestyle='-.')
+        ax2.set_xlabel('坏样本率: 坏样本数 / 样本总数')
+
+        for i, rate in enumerate(feature_table['坏样本率']):
+            ax2.scatter(rate, i, color=colors[2])
+
+        for i, v in feature_table[['样本总数', '好样本数', '坏样本数', '坏样本率']].iterrows():
+            ax1.text(v['样本总数'] / 2, i + len(feature_table) / 60, f"{int(v['好样本数'])}:{int(v['坏样本数'])}:{v['坏样本率']:.2%}")
+
+        ax1.invert_yaxis()
+
+        fig.suptitle(f'{desc}分箱图\n\n')
+
+        handles1, labels1 = ax1.get_legend_handles_labels()
+        handles2, labels2 = ax2.get_legend_handles_labels()
+        fig.legend(handles1 + handles2, labels1 + labels2, loc='upper center', ncol=len(labels1 + labels2), bbox_to_anchor=(0.5, 0.94), frameon=False)
+
+        plt.tight_layout()
+
+        if save:
+            if os.path.dirname(save) and not os.path.exists(os.path.dirname(save)):
+                os.makedirs(os.path.dirname(save))
+
+            fig.savefig(save, dpi=240, format="png", bbox_inches="tight")
+            
+    def query_feature_rule(self, data, feature, desc="", bin_plot=False, figsize=(10, 6), save=None, *args, **kwargs):
+        feature_table = self.feature_bin_stats(data, feature, desc=desc, *args, **kwargs)
+        
+        if bin_plot:
+            self.bin_plot(feature_table, desc=desc, figsize=figsize, save=save)
+        
+        return feature_table
+
+
 if __name__ == '__main__':
     import numpy as np
     import pandas as pd

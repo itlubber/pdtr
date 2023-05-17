@@ -1,12 +1,14 @@
 # 自动决策树规则挖掘工具包
 
+## 背景简介
 
+金融场景风险大致可以概括为三种：系统性风险、欺诈风险（无还款意愿）、信用风险（无还款能力），而作为一名风控搬砖工，日常工作中有大量的数据挖掘工作，如何从高维数据集中挖掘出行之有效的规则、策略及模型来防范欺诈风险和信用风险每个搬砖工的基操。本仓库由笔者基于网上开源的一系列相关知识，结合实际工作中遇到的实际需求，整理得到。旨在为诸位仁兄提供一个便捷、高效、赏心悦目的决策树组合策略挖掘报告，及一系列能够实际运用到风险控制上的策略。
 
-# 环境准备
+## 环境准备
 
-## 创建虚拟环境（可选）
+### 创建虚拟环境（可选）
 
-### 通过`conda`创建虚拟环境
++ 通过`conda`创建虚拟环境
 
 ```bash
 >> conda create -n score python==3.8.13
@@ -95,7 +97,7 @@ Executing transaction: done
 #     $ conda deactivate
 ```
 
-### 通过`pyenv`创建虚拟环境
++ 通过`pyenv`创建虚拟环境
 
 ```bash
 # 安装环境
@@ -107,7 +109,7 @@ Executing transaction: done
 ```
 
 
-## 安装项目依赖
+### 安装项目依赖
 
 ```bash
 >> pip install -r requirements.txt -i http://mirrors.aliyun.com/pypi/simple/ --trusted-host mirrors.aliyun.com
@@ -119,25 +121,81 @@ Successfully installed CairoSVG-2.7.0 cairocffi-1.5.1 category-encoders-2.6.0 cf
 ```
 
 
-## `PDTR` 安装
+### `PDTR` 安装
 
 ```bash
 pip install pdtr
 ```
 
 
-## 运行样例
+### 运行样例
 
-### 数据集加载
++ 导入相关依赖
+
+```python
+import os
+import numpy as np
+import pandas as pd
+from sklearn.model_selection import train_test_split
+
+try:
+    from pdtr import ParseDecisionTreeRules
+except ModuleNotFoundError:
+    import sys
+    
+    sys.path.append("../")
+    from pdtr import ParseDecisionTreeRules
+    
+np.random.seed(1)
+```
+
++ 数据集加载
+
+```python
+feature_map = {}
+n_samples = 10000
+ab = np.array(list('ABCDEFG'))
+
+data = pd.DataFrame({
+    'A': np.random.randint(10, size = n_samples),
+    'B': ab[np.random.choice(7, n_samples)],
+    'C': ab[np.random.choice(2, n_samples)],
+    'D': np.random.random(size = n_samples),
+    'target': np.random.randint(2, size = n_samples)
+})
+```
+
++ 数据集拆分
+
+```python
+train, test = train_test_split(data, test_size=0.3, shuffle=data["target"])
+```
+
++ 决策树自动规则挖掘
+
+```python
+pdtr_instance = ParseDecisionTreeRules(target="target", max_iter=8, output="model_report/决策树组合策略挖掘.xlsx")
+pdtr_instance.fit(train, lift=0., max_depth=2, max_samples=1., verbose=False, max_features="auto")
+```
+
++ 规则验证
+
+```python
+all_rules = pdtr_instance.insert_all_rules(test=test)
+```
+
++ 导出策略挖掘报告
+
+```python
+pdtr_instance.save()
+```
+
++ 挖掘报告
+
+`examples/决策树组合策略挖掘.xlsx`
 
 
-### 数据集拆分
+## 参考
 
-
-### 决策树自动规则挖掘
-
-
-### 规则验证
-
-
-### 导出策略挖掘报告
+> https://github.com/itlubber/LogisticRegressionPipeline
+> https://github.com/itlubber/itlubber-excel-writer

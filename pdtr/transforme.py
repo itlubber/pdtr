@@ -26,6 +26,9 @@ warnings.filterwarnings("ignore")
 class ParseDecisionTreeRules:
     
     def __init__(self, target="target", labels=["positive", "negative"], feature_map={}, nan=-1., max_iter=128, output="model_report/决策树组合策略挖掘.xlsx", writer=None):
+        """决策树自动规则挖掘工具包
+        
+        """
         self.target = target
         self.labels = labels
         self.feature_map = feature_map
@@ -125,10 +128,10 @@ class ParseDecisionTreeRules:
                                    X_train=x, 
                                    y_train=y,
                                    feature_names=x.columns,
-                                   target_name=target, 
+                                   target_name=self.target, 
                                    class_names=labels,
                                   )
-        print(rules)
+        
         rules = rules.query(f"LIFT值 >= {lift} & 命中率 <= {max_samples}").reset_index(drop=True)
 
         if len(rules) > 0:
@@ -196,7 +199,7 @@ class ParseDecisionTreeRules:
     
     def insert_dt_rules(self, parsed_rules, end_row, start_col, save=None):
         end_row, end_col = self.writer.insert_df2sheet(self.worksheet, parsed_rules, (end_row + 2, start_col))
-        
+
         for c in ['好样本占比', '坏样本占比', '命中率', '坏率', '样本整体坏率', 'LIFT值']:
             conditional_column = get_column_letter(start_col + parsed_rules.columns.get_loc(c))
             self.writer.set_number_format(self.worksheet, f"{conditional_column}{end_row - len(parsed_rules)}:{conditional_column}{end_row - 1}", "0.00%")
@@ -259,23 +262,47 @@ class ParseDecisionTreeRules:
             parsed_rules_train["组合策略"] = parsed_rules_train["组合策略"].replace(self.feature_map, regex=True)
         self.end_row, _ = self.writer.insert_value2sheet(self.worksheet, (self.end_row + 2, self.start_col), value="训练集决策树组合策略")
         self.end_row, _ = self.insert_dt_rules(parsed_rules_train, self.end_row, self.start_col)
+        outputs = (parsed_rules_train,)
         
         if val is not None:
             parsed_rules_val = self.transform(val)
             self.end_row, _ = self.writer.insert_value2sheet(self.worksheet, (self.end_row + 2, self.start_col), value="验证集决策树组合策略")
             self.end_row, _ = self.insert_dt_rules(parsed_rules_val, self.end_row, self.start_col)
+            outputs = outputs + (parsed_rules_val,)
         
         if test is not None:
             parsed_rules_test = self.transform(test)
             self.end_row, _ = self.writer.insert_value2sheet(self.worksheet, (self.end_row + 2, self.start_col), value="测试集决策树组合策略")
             self.end_row, _ = self.insert_dt_rules(parsed_rules_test, self.end_row, self.start_col)
+            outputs = outputs + (parsed_rules_test,)
             
+        return outputs
+    
     def save(self):
         self.writer.save(self.output)
         
        
 if __name__ == '__main__':
-    pdtr = ParseDecisionTreeRules(target=target, feature_map=feature_map, max_iter=8)
+    import numpy as np
+    import pandas as pd
+    from sklearn.model_selection import train_test_split
+    
+    
+    feature_map = {}
+    n_samples = 10000
+    ab = np.array(list('ABCDEFG'))
+
+    data = pd.DataFrame({
+        'A': np.random.randint(10, size = n_samples),
+        'B': ab[np.random.choice(7, n_samples)],
+        'C': ab[np.random.choice(2, n_samples)],
+        'D': np.random.random(size = n_samples),
+        'target': np.random.randint(2, size = n_samples)
+    })
+
+    train, test = train_test_split(data, test_size=0.3, shuffle=data["target"])
+    
+    pdtr = ParseDecisionTreeRules(target="target", feature_map=feature_map, max_iter=8)
     pdtr.fit(train, lift=3., max_depth=2, max_samples=0.1, verbose=False, min_samples_split=8, min_samples_leaf=5, max_features="auto")
     pdtr.insert_all_rules(test=test)
     pdtr.save()

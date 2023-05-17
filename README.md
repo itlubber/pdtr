@@ -127,6 +127,16 @@ Successfully installed CairoSVG-2.7.0 cairocffi-1.5.1 category-encoders-2.6.0 cf
 pip install pdtr
 ```
 
+### 版本介绍
+
++ `0.1.0`
+
+仅包含决策树策略挖掘相关工具
+
++ `0.1.1`
+
+除版本 `0.1.0` 中的决策树挖掘相关工具以外，新增了基于 `toad` 和 `optbinning` 的单变量策略挖掘相关方法
+
 
 ### 运行样例
 

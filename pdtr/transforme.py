@@ -168,7 +168,11 @@ class ParseDecisionTreeRules:
         total_bad_rate = y.sum() / len(y)
 
         rules = pd.DataFrame()
-        for rule in parsed_rules["组合策略"].unique():
+        
+        if isinstance(parsed_rules, pd.DataFrame):
+            parsed_rules = parsed_rules["组合策略"].unique()
+        
+        for rule in parsed_rules:
             select_index = x.query(rule).index
             if len(select_index) > 0:
                 y_select = y[select_index]

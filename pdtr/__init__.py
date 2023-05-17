@@ -9,5 +9,5 @@ from .excel_writer import ExcelWriter
 from .transforme import ParseDecisionTreeRules
 
 
-__version__ = "0.1.0"
+__version__ = "0.1.1"
 __all__ = ["ParseDecisionTreeRules", "ExcelWriter"]

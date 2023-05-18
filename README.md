@@ -202,7 +202,7 @@ pdtr_instance.save()
 
 + 挖掘报告
 
-`examples/决策树组合策略挖掘.xlsx`
+[`examples/决策树组合策略挖掘.xlsx`](https://github.com/itlubber/pdtr/blob/main/examples/model_report/%E5%86%B3%E7%AD%96%E6%A0%91%E7%BB%84%E5%90%88%E7%AD%96%E7%95%A5%E6%8C%96%E6%8E%98.xlsx)
 
 
 ## 参考

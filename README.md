@@ -4,6 +4,33 @@
 
 金融场景风险大致可以概括为三种：系统性风险、欺诈风险（无还款意愿）、信用风险（无还款能力），而作为一名风控搬砖工，日常工作中有大量的数据挖掘工作，如何从高维数据集中挖掘出行之有效的规则、策略及模型来防范欺诈风险和信用风险每个搬砖工的基操。本仓库由笔者基于网上开源的一系列相关知识，结合实际工作中遇到的实际需求，整理得到。旨在为诸位仁兄提供一个便捷、高效、赏心悦目的决策树组合策略挖掘报告，及一系列能够实际运用到风险控制上的策略。
 
+## 项目结构
+
+```bash
+pdtr
+|   README.md                           # 说明文档
+|   setup.py                            # 打包发布文件
+|   LICENSE                             # 开源协议
+|   requirements.txt                    # 项目依赖包
++---examples                            # 演示样例
+|   |   combine_rules_cache             # 缓存文件
+|   |   combine_rules_cache.svg         # 缓存文件
+|   |   pdtr_samplts.ipynb              # 演示样例程序
+|   \---model_report                    # 模型报告输出文件夹
+|       |   决策树组合策略挖掘.xlsx      # 策略挖掘报告
+|       +---auto_mining_rules           # 组合策略可视化存储文件夹
+|       |       combiner_rules_0.png    # 决策树可视化图片
+|       |       ......
+|       \---bin_plots                   # 简单策略可视化存储文件夹
+|               bin_vars_A.png          # 变量分箱可视化图片
+|               ......
+\---pdtr                                # PDTR 源码包
+        template.xlsx                   # excel 模版文件
+        excel_writer.py                 # excel写入公共方法
+        matplot_chinese.ttf             # matplotlib 中文字体
+        transforme.py                   # 策略挖掘方法
+```
+
 ## 环境准备
 
 ### 创建虚拟环境（可选）

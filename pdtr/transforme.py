@@ -29,9 +29,17 @@ warnings.filterwarnings("ignore")
 
 class ParseDecisionTreeRules:
     
-    def __init__(self, target="target", labels=["positive", "negative"], feature_map={}, nan=-1., max_iter=128, output="model_report/决策树组合策略挖掘.xlsx", writer=None):
+    def __init__(self, target="target", labels=["positive", "negative"], feature_map={}, nan=-1., max_iter=128, output="model_report/决策树组合策略挖掘.xlsx", writer=None, combiner=None):
         """决策树自动规则挖掘工具包
-        
+
+        :param target: 数据集中好坏样本标签列名称，默认 target
+        :param labels: 好坏样本标签名称，传入一个长度为2的列表，第0个元素为好样本标签，第1个元素为坏样本标签，默认 ["positive", "negative"]
+        :param feature_map: 变量名称及其含义，在后续输出报告和策略信息时增加可读性，默认 {}
+        :param nan: 在决策树策略挖掘时，默认空值填充的值，默认 -1
+        :param max_iter: 最多支持在数据集上训练多少颗树模型，每次生成一棵树后，会剔除特征重要性最高的特征后，再生成树，默认 128
+        :param output: excel 挖掘报告保存的路径， 默认 model_report/决策树组合策略挖掘.xlsx
+        :param writer: 在之前程序运行时生成的 ExcelWriter，可以支持传入一个已有的writer，后续所有内容将保存至该workbook中，默认 None
+        :param combiner: 可以传入提前训练好的 combiner，支持 toad.transform.Combiner 和 笔者重写的 Combiner
         """
         self.target = target
         self.labels = labels
@@ -40,7 +48,10 @@ class ParseDecisionTreeRules:
         self.max_iter = max_iter
         self.output = output
         self.decision_trees = []
-        self.combiner = toad.transform.Combiner()
+        if combiner:
+            self.combiner = combiner
+        else:
+            self.combiner = toad.transform.Combiner()
         self.target_enc = None
         self.feature_names = None
         self.dt_rules = pd.DataFrame()
@@ -59,14 +70,19 @@ class ParseDecisionTreeRules:
             self.worksheet = self.writer.get_sheet_by_name("决策树组合策略挖掘")
     
     @staticmethod
-    def init_setting(font_path=None):
+    def init_setting(font_path="matplot_chinese.ttf"):
         import matplotlib
-        
         pd.options.display.float_format = '{:.4f}'.format
         pd.set_option('display.max_colwidth', 300)
         plt.style.use('seaborn-ticks')
+
         if font_path:
             from matplotlib import font_manager
+            if not os.path.isfile(font_path):
+                import wget
+                wget.download("https://itlubber.art/upload/matplot_chinese.ttf", 'matplot_chinese.ttf')
+                font_path = "matplot_chinese.ttf"
+
             matplotlib.font_manager.fontManager.addfont(font_path)
             matplotlib.rcParams['font.family'] = font_manager.FontProperties(fname=font_path).get_name()
         else:
@@ -172,10 +188,12 @@ class ParseDecisionTreeRules:
                                                 label_fontsize=10,
                                             )
             if verbose:
+                from IPython.core.display_functions import display
                 if self.feature_map is not None and len(self.feature_map) > 0:
-                    print(rules.replace(self.feature_map, regex=True))
+                    display(rules.replace(self.feature_map, regex=True))
                 else:
-                    print(rules)
+                    display(rules)
+                display(decision_tree_viz)
             if save:
                 if os.path.dirname(save) and not os.path.exists(os.path.dirname(save)):
                     os.makedirs(os.path.dirname(save))
@@ -234,7 +252,17 @@ class ParseDecisionTreeRules:
         
         return end_row, end_col
         
-    def fit(self, x, y=None, max_depth=2, lift=3, max_samples=0.2, min_score=None, verbose=False, **kwargs):
+    def fit(self, x, y=None, max_depth=2, lift=0., max_samples=1., min_score=None, verbose=False, *args, **kwargs):
+        """组合策略挖掘
+
+        :param x: 包含标签的数据集
+        :param max_depth: 决策树最大深度，即最多组合的特征个数，默认 2
+        :param lift: 组合策略最小的lift值，默认 0.，即全部组合策略
+        :param max_samples: 每条组合策略的最大样本占比，默认 1.0，即全部组合策略
+        :param min_score: 决策树拟合时最小的auc，如果不满足则停止后续生成决策树
+        :param verbose: 是否调试模式，仅在 jupyter 环境有效
+        :param kwargs: DecisionTreeClassifier 参数
+        """
         y = x[self.target]
         X_TE = self.encode_cat_features(x.drop(columns=[self.target]), y)
         X_TE = X_TE.fillna(self.nan)
@@ -242,7 +270,7 @@ class ParseDecisionTreeRules:
         self.feature_names = list(X_TE.columns)
         
         for i in range(self.max_iter):
-            decision_tree = DecisionTreeClassifier(max_depth=max_depth, **kwargs)
+            decision_tree = DecisionTreeClassifier(max_depth=max_depth, *args, **kwargs)
             decision_tree = decision_tree.fit(X_TE, y)
             
             if (min_score is not None and decision_tree.score(X_TE, y) < min_score) or len(X_TE.columns) < max_depth:
@@ -279,6 +307,13 @@ class ParseDecisionTreeRules:
             return pd.DataFrame(columns=self.describe_columns)
     
     def insert_all_rules(self, val=None, test=None):
+        """组合策略插入excel文档
+
+        :param val: 验证数据集
+        :param test: 测试数据集
+
+        :return: 返回每个数据集组合策略命中情况
+        """
         parsed_rules_train = self.dt_rules.copy()
         if self.feature_map is not None and len(self.feature_map) > 0:
             parsed_rules_train["组合策略"] = parsed_rules_train["组合策略"].replace(self.feature_map, regex=True)
@@ -318,7 +353,7 @@ class ParseDecisionTreeRules:
         if np.issubdtype(bins.dtype, np.number):
             has_empty = len(bins) > 0 and np.isnan(bins[-1])
             if has_empty: bins = bins[:-1]
-            sp_l = ["负无穷"] + [round_float(b) for b in bins.tolist()] + ["正无穷"]
+            sp_l = ["负无穷"] + [self.round_float(b) for b in bins.tolist()] + ["正无穷"]
             for i in range(len(sp_l) - 1): l.append('['+str(sp_l[i])+' , '+str(sp_l[i+1])+')')
             if has_empty: l.append('缺失值')
         else:
@@ -336,56 +371,75 @@ class ParseDecisionTreeRules:
 
         return {i if b != "缺失值" else EMPTYBINS: b for i, b in enumerate(l)}
 
-    def feature_bin_stats(self, data, feature, rules={}, min_n_bins=2, max_n_bins=3, max_n_prebins=10, min_prebin_size=0.02, min_bin_size=0.05, max_bin_size=None, gamma=0.01, monotonic_trend="auto_asc_desc", desc="", method='chi', verbose=0, combiner=None, ks=False):
-        if method not in ['dt', 'chi', 'quantile', 'step', 'kmeans', 'cart']:
-            raise "method is the one of ['dt', 'chi', 'quantile', 'step', 'kmeans', 'cart']"
-        
-        if data[feature].dropna().nunique() <= min_n_bins:
-            splits = []
-            for v in data[feature].dropna().unique():
-                splits.append(v)
+    def feature_bin_stats(self, data, feature, rules={}, min_n_bins=2, max_n_bins=3, max_n_prebins=10, min_prebin_size=0.02, min_bin_size=0.05, max_bin_size=None, gamma=0.01, monotonic_trend="auto_asc_desc", desc="", method='chi', verbose=False, ks=False):
+        """简单策略挖掘：特征分箱统计信息
 
-            if str(data[feature].dtypes) in ["object", "string", "category"]:
-                rule = {feature: [[s] for s in splits]}
-                rule[feature].append([[np.nan]])
-            else:
-                rule = {feature: sorted(splits) + [np.nan]}
+        :param data: 需要进行挖掘的数据集
+        :param feature: 传入需要计算的特征名称
+        :param desc: 特征的中文含义或者其他相关注释内容
+        :param method: 可以选择的分箱方法 ['dt', 'chi', 'quantile', 'step', 'kmeans', 'cart']， 默认为 chi
+        :param min_bin_size: 最小样本占比，默认为 0.05
+        :param max_bin_size: 最大样本占比，传入 None 时不限制，默认为 None
+        :param min_n_bins: 最小分箱数，默认 2
+        :param rules: 自定义分箱规则，默认为 {}
+        :param verbose: 是否开启调试模式，会答应更多东西，默认为 False
+        :param ks: 是否输出特征每个分箱上的分档ks指标，默认为 False
+        :param max_n_prebins: method 为 cart 时支持，预分箱时的最大分箱数，默认 10
+        :param min_prebin_size: method 为 cart 时支持，预分箱时的最小样本占比，默认为 0.02
+        :param max_n_bins: method 为 cart 时支持，最大分箱数，传入 None 时不限制，默认为 3
+        :param gamma: method 为 cart 时支持，正则化参数，默认 0.01
+        :param monotonic_trend: method 为 cart 时支持，特征分箱的模式，支持 optbinning 中的所有 monotonic_trend， 默认 auto_asc_desc，即单增或单减
+
+        :return: pd.DataFrame, 特征分箱的统计信息
+        """
+        if rules is not None and len(rules) > 0:
+            if isinstance(rules, (list, np.ndarray)): rules = {feature: rules}
+            self.combiner.update(rules)
         else:
-            if method == "cart":
-                y = data[self.target]
-                if str(data[feature].dtypes) in ["object", "string", "category"]:
-                    dtype = "categorical"
-                    x = data[feature].astype("category").values
-                else:
-                    dtype = "numerical"
-                    x = data[feature].values
+            if method not in ['dt', 'chi', 'quantile', 'step', 'kmeans', 'cart']:
+                raise "method is the one of ['dt', 'chi', 'quantile', 'step', 'kmeans', 'cart']"
 
-                _combiner = OptimalBinning(feature, dtype=dtype, min_n_bins=min_n_bins, max_n_bins=max_n_bins, max_n_prebins=max_n_prebins, min_prebin_size=min_prebin_size, min_bin_size=min_bin_size, max_bin_size=max_bin_size, monotonic_trend=monotonic_trend, gamma=gamma).fit(x, y)
-                if _combiner.status == "OPTIMAL":
-                    rule = {feature: [s.tolist() if isinstance(s, np.ndarray) else s for s in _combiner.splits] + [[np.nan] if dtype == "categorical" else np.nan]}
+            if data[feature].dropna().nunique() <= min_n_bins:
+                splits = []
+                for v in data[feature].dropna().unique():
+                    splits.append(v)
+
+                if str(data[feature].dtypes) in ["object", "string", "category"]:
+                    rule = {feature: [[s] for s in splits]}
+                    rule[feature].append([[np.nan]])
+                else:
+                    rule = {feature: sorted(splits) + [np.nan]}
+            else:
+                if method == "cart":
+                    y = data[self.target]
+                    if str(data[feature].dtypes) in ["object", "string", "category"]:
+                        dtype = "categorical"
+                        x = data[feature].astype("category").values
+                    else:
+                        dtype = "numerical"
+                        x = data[feature].values
+
+                    _combiner = OptimalBinning(feature, dtype=dtype, min_n_bins=min_n_bins, max_n_bins=max_n_bins, max_n_prebins=max_n_prebins, min_prebin_size=min_prebin_size, min_bin_size=min_bin_size, max_bin_size=max_bin_size, monotonic_trend=monotonic_trend, gamma=gamma).fit(x, y)
+                    if _combiner.status == "OPTIMAL":
+                        rule = {feature: [s.tolist() if isinstance(s, np.ndarray) else s for s in _combiner.splits] + [[np.nan] if dtype == "categorical" else np.nan]}
+                    else:
+                        _combiner = toad.transform.Combiner()
+                        _combiner.fit(data[[feature, self.target]].dropna(), self.target, method="chi", min_samples=min_bin_size, n_bins=max_n_bins)
+                        rule = {feature: [s.tolist() if isinstance(s, np.ndarray) else s for s in _combiner[feature]] + [[np.nan] if dtype == "categorical" else np.nan]}
                 else:
                     _combiner = toad.transform.Combiner()
-                    _combiner.fit(data[[feature, self.target]].dropna(), self.target, method="chi", min_samples=min_bin_size, n_bins=max_n_bins)
-                    rule = {feature: [s.tolist() if isinstance(s, np.ndarray) else s for s in _combiner[feature]] + [[np.nan] if dtype == "categorical" else np.nan]}
-            else:
-                _combiner = toad.transform.Combiner()
-                if method in ("step", "quantile"):
-                    _combiner.fit(data[[feature, self.target]].dropna(), self.target, method=method, n_bins=max_n_bins)
-                else:
-                    _combiner.fit(data[[feature, self.target]].dropna(), self.target, method=method, min_samples=min_bin_size, n_bins=max_n_bins)
-                rule = {feature: [s.tolist() if isinstance(s, np.ndarray) else s for s in _combiner[feature]] + [[np.nan] if str(data[feature].dtypes) in ["object", "string", "category"] else np.nan]}
+                    if method in ("step", "quantile"):
+                        _combiner.fit(data[[feature, self.target]].dropna(), self.target, method=method, n_bins=max_n_bins)
+                    else:
+                        _combiner.fit(data[[feature, self.target]].dropna(), self.target, method=method, min_samples=min_bin_size, n_bins=max_n_bins)
+                    rule = {feature: [s.tolist() if isinstance(s, np.ndarray) else s for s in _combiner[feature]] + [[np.nan] if str(data[feature].dtypes) in ["object", "string", "category"] else np.nan]}
+
+            self.combiner.update(rule)
         
-        self.combiner.update(rule)
-        
-        if verbose > 0:
+        if verbose:
             print(data[feature].describe())
 
-        if rules and isinstance(rules, list): rules = {feature: rules}
-        if rules and isinstance(rules, dict): self.combiner.update(rules)
-
-        feature_bin = self.combiner[feature]
-        feature_bin_dict = self.feature_bins(np.array(feature_bin))
-        
+        feature_bin_dict = self.feature_bins(np.array(self.combiner[feature]))
         df_bin = self.combiner.transform(data[[feature, self.target]], labels=False)
         
         table = df_bin[[feature, self.target]].groupby([feature, self.target]).agg(len).unstack()
@@ -434,6 +488,16 @@ class ParseDecisionTreeRules:
 
     @staticmethod
     def bin_plot(feature_table, desc="", figsize=(10, 6), colors=["#2639E9", "#F76E6C", "#FE7715"], max_len=35, save=None):
+        """简单策略挖掘：特征分箱图
+
+        :param feature_table: 特征分箱的统计信息表，由 feature_bin_stats 运行得到
+        :param desc: 特征中文含义或者其他相关信息
+        :param figsize: 图像尺寸大小，传入一个tuple，默认 （10， 6）
+        :param colors: 图片主题颜色，默认即可
+        :param save: 图片保存路径
+
+        :return Figure
+        """
         feature_table = feature_table.copy()
 
         feature_table["分箱"] = feature_table["分箱"].apply(lambda x: x if re.match("^\[.*\)$", x) else str(x)[:max_len] + "..")
@@ -468,8 +532,21 @@ class ParseDecisionTreeRules:
                 os.makedirs(os.path.dirname(save))
 
             fig.savefig(save, dpi=240, format="png", bbox_inches="tight")
+
+        return fig
             
     def query_feature_rule(self, data, feature, desc="", bin_plot=False, figsize=(10, 6), save=None, *args, **kwargs):
+        """传入数据集和其中一个特征名称，输出简单策略挖掘统计信息
+
+        :param data: 数据集
+        :param feature: 特征名称
+        :param desc: 特征中文含义或其他相关信息
+        :param bin_plot: 是否可视化特征分箱图
+        :param figsize: 图像的尺寸
+        :param save: 图像保存的路径
+
+        :return: pd.DataFrame, 特征分箱的统计信息
+        """
         feature_table = self.feature_bin_stats(data, feature, desc=desc, *args, **kwargs)
         
         if bin_plot:
@@ -482,8 +559,8 @@ if __name__ == '__main__':
     import numpy as np
     import pandas as pd
     from sklearn.model_selection import train_test_split
-    
-    
+
+
     feature_map = {}
     n_samples = 10000
     ab = np.array(list('ABCDEFG'))
@@ -497,7 +574,7 @@ if __name__ == '__main__':
     })
 
     train, test = train_test_split(data, test_size=0.3, shuffle=data["target"])
-    
+
     pdtr = ParseDecisionTreeRules(target="target", feature_map=feature_map, max_iter=8)
     pdtr.fit(train, lift=3., max_depth=2, max_samples=0.1, verbose=False, min_samples_split=8, min_samples_leaf=5, max_features="auto")
     pdtr.insert_all_rules(test=test)

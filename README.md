@@ -10,6 +10,28 @@
 > 
 > pipy包：https://pypi.org/project/pdtr/
 
+## 交流
+
+<table style="text-align:center !important;border=0;">
+    <tr>
+        <td>
+            <span>微信: itlubber</span>
+        </td>
+        <td>
+            <span>微信公众号: itlubber_art</span>
+        </td>
+    </tr>
+    <tr>
+        <td>
+            <img src="https://itlubber.art//upload/itlubber.png" alt="itlubber.png" width="50%" border=0/>
+        </td>
+        <td>
+            <img src="https://itlubber.art//upload/itlubber_art.png" alt="itlubber_art.png" width="50%" border=0/>
+        </td>
+    </tr>
+</table>
+
+
 ## 背景简介
 
 金融场景风险大致可以概括为三种：系统性风险、欺诈风险（无还款意愿）、信用风险（无还款能力），而作为一名风控搬砖工，日常工作中有大量的数据挖掘工作，如何从高维数据集中挖掘出行之有效的规则、策略及模型来防范欺诈风险和信用风险每个搬砖工的基操。本仓库由笔者基于网上开源的一系列相关知识，结合实际工作中遇到的实际需求，整理得到。旨在为诸位仁兄提供一个便捷、高效、赏心悦目的决策树组合策略挖掘报告，及一系列能够实际运用到风险控制上的策略。

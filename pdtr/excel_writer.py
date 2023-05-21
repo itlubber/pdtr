@@ -362,15 +362,20 @@ class ExcelWriter:
             first_style, first_left_style, first_middle_style, first_right_style
         ])
 
-    def save(self, filename):
+    def save(self, filename, close=True):
         """
         保存excel文件
 
         :param filename: 需要保存 excel 文件的路径
+        :param close: 是否需要释放 writer
         """
-        self.workbook.remove(self.style_sheet)
+        if self.style_sheet in self.workbook.sheetnames:
+            self.workbook.remove(self.style_sheet)
+        
         self.workbook.save(filename)
-        self.workbook.close()
+        
+        if close:
+            self.workbook.close()
 
 
 if __name__ == '__main__':

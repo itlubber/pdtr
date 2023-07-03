@@ -7,7 +7,6 @@
 
 import os
 import re
-import cairosvg
 import dtreeviz
 import warnings
 import numpy as np
@@ -199,8 +198,17 @@ class ParseDecisionTreeRules:
                     os.makedirs(os.path.dirname(save))
 
                 decision_tree_viz.save("combine_rules_cache.svg")
-                cairosvg.svg2png(url="combine_rules_cache.svg", write_to=save, dpi=240)
 
+                try:
+                    import cairosvg
+                    cairosvg.svg2png(url="combine_rules_cache.svg", write_to=save, dpi=240)
+                except:
+                    from reportlab.graphics import renderPDF
+                    from svglib.svglib import svg2rlg
+    
+                    drawing = svg2rlg("combine_rules_cache.svg")
+                    renderPDF.drawToFile(drawing, "save.png", dpi=240, fmt="PNG")
+        
         if drop:
             return rules, decision_tree.feature_names_in_[list(decision_tree.feature_importances_).index(max(decision_tree.feature_importances_))]
         else:

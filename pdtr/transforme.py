@@ -364,13 +364,13 @@ class ParseDecisionTreeRules:
         feature_table = feature_bin_stats(data, feature, desc=desc, *args, **kwargs)
 
         if plot:
-            bin_plot(feature_table, desc=desc, figsize=figsize, save=save)
+            self.bin_plot(feature_table, desc=desc, figsize=figsize, save=save)
 
         return feature_table
     
     @staticmethod
     def bin_plot(*args, **kwargs):
-        bin_plot(*args, **kwargs)
+        return bin_plot(*args, **kwargs)
 
     def save(self, output="model_report/决策树组合策略挖掘.xlsx"):
         self.writer.save(output)

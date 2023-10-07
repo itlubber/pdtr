@@ -1,6 +1,7 @@
 wget
 scorecardpipeline
 category-encoders>=2.6.0
+statsmodels<0.14,>=0.13.2
 CairoSVG>=2.7.0
 graphviz>=0.20.1
 dtreeviz>=2.2.1

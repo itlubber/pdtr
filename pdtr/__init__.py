@@ -5,9 +5,8 @@
 @Site    : itlubber.art
 """
 
-from .excel_writer import ExcelWriter
 from .transforme import ParseDecisionTreeRules
 
 
-__version__ = "0.1.3"
-__all__ = ["ParseDecisionTreeRules", "ExcelWriter"]
+__version__ = "0.1.4"
+__all__ = ["ParseDecisionTreeRules"]

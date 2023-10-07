@@ -5,30 +5,26 @@
 @Site    : itlubber.art
 """
 
+import warnings
 import os
 import re
+import graphviz
 import dtreeviz
-import warnings
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
-from openpyxl.utils import get_column_letter, column_index_from_string
+from openpyxl.worksheet.worksheet import Worksheet
 
 import toad
 import category_encoders as ce
 from optbinning import OptimalBinning
-from sklearn.preprocessing import LabelEncoder
-from sklearn.tree import _tree, DecisionTreeClassifier, plot_tree, export_graphviz
-
-from .excel_writer import ExcelWriter
-
-
-warnings.filterwarnings("ignore")
+from sklearn.tree import DecisionTreeClassifier
+from scorecardpipeline import ExcelWriter, get_column_letter, init_setting, Combiner, feature_bin_stats, bin_plot, dataframe2excel
 
 
 class ParseDecisionTreeRules:
-    
-    def __init__(self, target="target", labels=["positive", "negative"], feature_map={}, nan=-1., max_iter=128, output="model_report/决策树组合策略挖掘.xlsx", writer=None, combiner=None):
+
+    def __init__(self, target="target", labels=["positive", "negative"], feature_map={}, nan=-1., max_iter=128, writer=None, combiner=None, seed=None, theme_color="2639E9"):
         """决策树自动规则挖掘工具包
 
         :param target: 数据集中好坏样本标签列名称，默认 target
@@ -40,58 +36,36 @@ class ParseDecisionTreeRules:
         :param writer: 在之前程序运行时生成的 ExcelWriter，可以支持传入一个已有的writer，后续所有内容将保存至该workbook中，默认 None
         :param combiner: 可以传入提前训练好的 combiner，支持 toad.transform.Combiner 和 笔者重写的 Combiner
         """
+        self.seed = seed
+        self.theme_color = theme_color
         self.target = target
         self.labels = labels
         self.feature_map = feature_map
         self.nan = nan
         self.max_iter = max_iter
-        self.output = output
         self.decision_trees = []
         if combiner:
             self.combiner = combiner
         else:
-            self.combiner = toad.transform.Combiner()
+            self.combiner = Combiner()
         self.target_enc = None
         self.feature_names = None
         self.dt_rules = pd.DataFrame()
         self.end_row = 2
         self.start_col = 2
         self.describe_columns = ["组合策略", "命中数", "命中率", "好样本数", "好样本占比", "坏样本数", "坏样本占比", "坏率", "样本整体坏率", "LIFT值"]
-        
-        self.init_setting(font_path=os.path.join(os.path.dirname(os.path.abspath(__file__)), 'matplot_chinese.ttf'))
-        
-        if output:
-            if writer:
-                self.writer = writer
-            else:
-                self.writer = ExcelWriter(theme_color="2639E9")
-            
-            self.worksheet = self.writer.get_sheet_by_name("决策树组合策略挖掘")
-    
-    @staticmethod
-    def init_setting(font_path="matplot_chinese.ttf"):
-        import matplotlib
-        pd.options.display.float_format = '{:.4f}'.format
-        pd.set_option('display.max_colwidth', 300)
-        plt.style.use('seaborn-ticks')
 
-        if font_path:
-            from matplotlib import font_manager
-            if not os.path.isfile(font_path):
-                import wget
-                wget.download("https://itlubber.art/upload/matplot_chinese.ttf", 'matplot_chinese.ttf')
-                font_path = "matplot_chinese.ttf"
+        init_setting(seed=self.seed)
 
-            matplotlib.font_manager.fontManager.addfont(font_path)
-            matplotlib.rcParams['font.family'] = font_manager.FontProperties(fname=font_path).get_name()
+        if writer:
+            self.writer = writer
         else:
-            matplotlib.rcParams['font.family'] = ["KaiTi"]
-        matplotlib.rcParams['axes.unicode_minus'] = False
-    
+            self.writer = ExcelWriter(theme_color=self.theme_color)
+
     def encode_cat_features(self, X, y):
         cat_features = list(set(X.select_dtypes(include=[object, pd.CategoricalDtype]).columns))
         cat_features_index = [i for i, f in enumerate(X.columns) if f in cat_features]
-        
+
         if len(cat_features) > 0:
             if self.target_enc is None:
                 self.target_enc = ce.TargetEncoder(cols=cat_features)
@@ -103,40 +77,40 @@ class ParseDecisionTreeRules:
                     self.target_enc.target_mapping[col] = dict(zip(mapping[col], mapping[f"{col}_target"]))
             else:
                 X_TE = X.join(self.target_enc.transform(X[cat_features]).add_suffix('_target'))
-            
+
             X_TE = X_TE.drop(columns=cat_features)
             return X_TE.rename(columns={f"{c}_target": c for c in cat_features})
         else:
             return X
-    
+
     def get_dt_rules(self, tree, feature_names, total_bad_rate, total_count):
         tree_ = tree.tree_
         left = tree.tree_.children_left
         right = tree.tree_.children_right
         feature_name = [feature_names[i] if i != -2 else "undefined!" for i in tree_.feature]
-        rules=dict()
+        rules = dict()
 
         global res_df
         res_df = pd.DataFrame()
 
-        def recurse(node, depth, parent): # 搜每个节点的规则
+        def recurse(node, depth, parent):  # 搜每个节点的规则
 
             if tree_.feature[node] != -2:  # 非叶子节点,搜索每个节点的规则
                 name = feature_name[node]
-                thd = np.round(tree_.threshold[node],3)
-                s= "{} <= {} ".format( name, thd, node )
+                thd = np.round(tree_.threshold[node], 3)
+                s = "{} <= {} ".format(name, thd, node)
                 # 左子
                 if node == 0:
-                    rules[node]=s
+                    rules[node] = s
                 else:
-                    rules[node]=rules[parent]+' & ' +s
+                    rules[node] = rules[parent] + ' & ' + s
                 recurse(left[node], depth + 1, node)
-                s="{} > {}".format(name, thd)
+                s = "{} > {}".format(name, thd)
                 # 右子 
                 if node == 0:
-                    rules[node]=s
+                    rules[node] = s
                 else:
-                    rules[node]=rules[parent]+' & ' +s
+                    rules[node] = rules[parent] + ' & ' + s
                 recurse(right[node], depth + 1, node)
             else:
                 df = pd.DataFrame()
@@ -153,39 +127,44 @@ class ParseDecisionTreeRules:
 
                 global res_df
 
-                res_df = pd.concat([res_df, df], 0)
+                res_df = pd.concat([res_df, df], axis=0)
 
         recurse(0, 1, 0)
 
         return res_df.sort_values("LIFT值", ascending=True)[self.describe_columns].reset_index(drop=True)
-    
-    def select_dt_rules(self, decision_tree, x, y, lift=3., max_samples=0.05, labels=["positive", "negative"], save=None, verbose=False, drop=False):
+
+    def select_dt_rules(self, decision_tree, x, y, lift=0., max_samples=1., labels=["positive", "negative"], save=None, verbose=False, drop=False):
         rules = self.get_dt_rules(decision_tree, x.columns, sum(y) / len(y), len(y))
-        viz_model = dtreeviz.model(decision_tree,
-                                   X_train=x, 
-                                   y_train=y,
-                                   feature_names=x.columns,
-                                   target_name=self.target, 
-                                   class_names=labels,
-                                  )
-        
+        total_rules = len(rules)
+
+        try:
+            viz_model = dtreeviz.model(decision_tree,
+                                       X_train=x,
+                                       y_train=y,
+                                       feature_names=x.columns,
+                                       target_name=self.target,
+                                       class_names=labels,
+                                       )
+        except AttributeError:
+            print("请检查 dtreeviz 版本")
+
         rules = rules.query(f"LIFT值 >= {lift} & 命中率 <= {max_samples}").reset_index(drop=True)
 
         if len(rules) > 0:
             decision_tree_viz = viz_model.view(
-                                                scale=1.5, 
-                                                orientation='LR', 
-                                                colors={
-                                                        "classes": [None, None, ["#2639E9", "#F76E6C"], ["#2639E9", "#F76E6C", "#FE7715", "#FFFFFF"]],
-                                                        "arrow": "#2639E9",
-                                                        'text_wedge': "#F76E6C",
-                                                        "pie": "#2639E9",
-                                                        "tile_alpha": 1,
-                                                        "legend_edge": "#FFFFFF",
-                                                    },
-                                                ticks_fontsize=10,
-                                                label_fontsize=10,
-                                            )
+                scale=1.5,
+                orientation='LR',
+                colors={
+                    "classes": [None, None, ["#2639E9", "#F76E6C"], ["#2639E9", "#F76E6C", "#FE7715", "#FFFFFF"]],
+                    "arrow": "#2639E9",
+                    'text_wedge': "#F76E6C",
+                    "pie": "#2639E9",
+                    "tile_alpha": 1,
+                    "legend_edge": "#FFFFFF",
+                },
+                ticks_fontsize=10,
+                label_fontsize=10,
+            )
             if verbose:
                 from IPython.core.display_functions import display
                 if self.feature_map is not None and len(self.feature_map) > 0:
@@ -197,7 +176,10 @@ class ParseDecisionTreeRules:
                 if os.path.dirname(save) and not os.path.exists(os.path.dirname(save)):
                     os.makedirs(os.path.dirname(save))
 
-                decision_tree_viz.save("combine_rules_cache.svg")
+                try:
+                    decision_tree_viz.save("combine_rules_cache.svg")
+                except graphviz.backend.execute.ExecutableNotFound:
+                    print("请确保您已安装 graphviz 程序并且正确配置了 PATH 路径。可参考: https://stackoverflow.com/questions/35064304/runtimeerror-make-sure-the-graphviz-executables-are-on-your-systems-path-aft")
 
                 try:
                     import cairosvg
@@ -205,24 +187,26 @@ class ParseDecisionTreeRules:
                 except:
                     from reportlab.graphics import renderPDF
                     from svglib.svglib import svg2rlg
-    
                     drawing = svg2rlg("combine_rules_cache.svg")
-                    renderPDF.drawToFile(drawing, "save.png", dpi=240, fmt="PNG")
-        
+                    renderPDF.drawToFile(drawing, save, dpi=240, fmt="PNG")
+
         if drop:
-            return rules, decision_tree.feature_names_in_[list(decision_tree.feature_importances_).index(max(decision_tree.feature_importances_))]
+            if len(rules) > 0:
+                return rules, decision_tree.feature_names_in_[list(decision_tree.feature_importances_).index(max(decision_tree.feature_importances_))], total_rules
+            else:
+                return rules, decision_tree.feature_names_in_[list(decision_tree.feature_importances_).index(min(decision_tree.feature_importances_))], total_rules
         else:
-            return rules
-    
+            return rules, total_rules
+
     def query_dt_rules(self, x, y, parsed_rules=None):
         total_count = len(y)
         total_bad_rate = y.sum() / len(y)
 
         rules = pd.DataFrame()
-        
+
         if isinstance(parsed_rules, pd.DataFrame):
             parsed_rules = parsed_rules["组合策略"].unique()
-        
+
         for rule in parsed_rules:
             select_index = x.query(rule).index
             if len(select_index) > 0:
@@ -239,27 +223,25 @@ class ParseDecisionTreeRules:
                 df['样本整体坏率'] = total_bad_rate
                 df['LIFT值'] = df['坏率'] / df['样本整体坏率']
             else:
-                df = pd.Series({'组合策略': rule,'好样本数': 0,'好样本占比': 0.,'坏样本数': 0,'坏样本占比': 0.,'命中数': 0,'命中率': 0.,'坏率': 0.,'样本整体坏率': total_bad_rate,'LIFT值': 0.,})
+                df = pd.Series({'组合策略': rule, '好样本数': 0, '好样本占比': 0., '坏样本数': 0, '坏样本占比': 0., '命中数': 0, '命中率': 0., '坏率': 0., '样本整体坏率': total_bad_rate, 'LIFT值': 0., })
 
             rules = pd.concat([rules, pd.DataFrame(df).T]).reset_index(drop=True)
 
         return rules[self.describe_columns]
-    
-    def insert_dt_rules(self, parsed_rules, end_row, start_col, save=None):
-        end_row, end_col = self.writer.insert_df2sheet(self.worksheet, parsed_rules, (end_row + 2, start_col))
 
-        for c in ['好样本占比', '坏样本占比', '命中率', '坏率', '样本整体坏率', 'LIFT值']:
-            conditional_column = get_column_letter(start_col + parsed_rules.columns.get_loc(c))
-            self.writer.set_number_format(self.worksheet, f"{conditional_column}{end_row - len(parsed_rules)}:{conditional_column}{end_row - 1}", "0.00%")
-        for c in ["坏率", "LIFT值"]:
-            conditional_column = get_column_letter(start_col + parsed_rules.columns.get_loc(c))
-            self.writer.add_conditional_formatting(self.worksheet, f'{conditional_column}{end_row - len(parsed_rules)}', f'{conditional_column}{end_row - 1}')
-        
+    def insert_dt_rules(self, parsed_rules, end_row, start_col, save=None, sheet=None, figsize=(500, 350)):
+        if isinstance(sheet, Worksheet):
+            worksheet = sheet
+        else:
+            worksheet = self.writer.get_sheet_by_name(sheet or "决策树组合策略挖掘")
+
+        end_row, end_col = dataframe2excel(parsed_rules, self.writer, sheet_name=worksheet, start_row=end_row + 1, start_col=start_col, percent_cols=['好样本占比', '坏样本占比', '命中率', '坏率', '样本整体坏率', 'LIFT值'], condition_cols=["坏率", "LIFT值"])
+
         if save is not None:
-            end_row, end_col = self.writer.insert_pic2sheet(self.worksheet, save, (end_row + 1, start_col), figsize=(400, 300))
-        
+            end_row, end_col = self.writer.insert_pic2sheet(worksheet, save, (end_row + 1, start_col), figsize=figsize)
+
         return end_row, end_col
-        
+
     def fit(self, x, y=None, max_depth=2, lift=0., max_samples=1., min_score=None, verbose=False, *args, **kwargs):
         """组合策略挖掘
 
@@ -271,21 +253,23 @@ class ParseDecisionTreeRules:
         :param verbose: 是否调试模式，仅在 jupyter 环境有效
         :param kwargs: DecisionTreeClassifier 参数
         """
+        worksheet = self.writer.get_sheet_by_name("策略详情")
+
         y = x[self.target]
         X_TE = self.encode_cat_features(x.drop(columns=[self.target]), y)
         X_TE = X_TE.fillna(self.nan)
-        
+
         self.feature_names = list(X_TE.columns)
-        
+
         for i in range(self.max_iter):
             decision_tree = DecisionTreeClassifier(max_depth=max_depth, *args, **kwargs)
             decision_tree = decision_tree.fit(X_TE, y)
-            
+
             if (min_score is not None and decision_tree.score(X_TE, y) < min_score) or len(X_TE.columns) < max_depth:
                 break
-            
+
             try:
-                parsed_rules, remove = self.select_dt_rules(decision_tree, X_TE, y, lift=lift, max_samples=max_samples, labels=self.labels, verbose=verbose, save=f"model_report/auto_mining_rules/combiner_rules_{i}.png", drop=True)
+                parsed_rules, remove, total_rules = self.select_dt_rules(decision_tree, X_TE, y, lift=lift, max_samples=max_samples, labels=self.labels, verbose=verbose, save=f"model_report/auto_mining_rules/combiner_rules_{i}.png", drop=True)
 
                 if len(parsed_rules) > 0:
                     self.dt_rules = pd.concat([self.dt_rules, parsed_rules]).reset_index(drop=True)
@@ -293,15 +277,19 @@ class ParseDecisionTreeRules:
                     if self.writer is not None:
                         if self.feature_map is not None and len(self.feature_map) > 0:
                             parsed_rules["组合策略"] = parsed_rules["组合策略"].replace(self.feature_map, regex=True)
-                        self.end_row, _ = self.insert_dt_rules(parsed_rules, self.end_row, self.start_col, save=f"model_report/auto_mining_rules/combiner_rules_{i}.png")
+                        self.end_row, _ = self.insert_dt_rules(parsed_rules, self.end_row, self.start_col, save=f"model_report/auto_mining_rules/combiner_rules_{i}.png", figsize=(500, 100 * total_rules), sheet=worksheet)
 
                 X_TE = X_TE.drop(columns=remove)
                 self.decision_trees.append(decision_tree)
             except:
-                pass
-        
+                import traceback
+                traceback.print_exc()
+
+        if len(self.dt_rules) <= 0:
+            print(f"未挖掘到有效策略, 可以考虑适当调整预设的筛选参数, 降低 lift / 提高 max_samples, 当前筛选标准为: 提取 lift >= {lift} 且 max_samples <= {max_samples} 的策略")
+
         return self
-    
+
     def transform(self, x, y=None):
         y = x[self.target]
         X_TE = self.encode_cat_features(x.drop(columns=[self.target]), y)
@@ -313,8 +301,8 @@ class ParseDecisionTreeRules:
             return parsed_rules
         else:
             return pd.DataFrame(columns=self.describe_columns)
-    
-    def insert_all_rules(self, val=None, test=None):
+
+    def insert_all_rules(self, val=None, test=None, sheet="策略汇总"):
         """组合策略插入excel文档
 
         :param val: 验证数据集
@@ -322,228 +310,40 @@ class ParseDecisionTreeRules:
 
         :return: 返回每个数据集组合策略命中情况
         """
+        worksheet = self.writer.get_sheet_by_name(sheet or "决策树组合策略挖掘")
+
+        if sheet:
+            self.writer.workbook.move_sheet(sheet, -1)
+
         parsed_rules_train = self.dt_rules.copy()
         if self.feature_map is not None and len(self.feature_map) > 0:
             parsed_rules_train["组合策略"] = parsed_rules_train["组合策略"].replace(self.feature_map, regex=True)
-        self.end_row, _ = self.writer.insert_value2sheet(self.worksheet, (self.end_row + 2, self.start_col), value="训练集决策树组合策略")
-        self.end_row, _ = self.insert_dt_rules(parsed_rules_train, self.end_row, self.start_col)
+        self.end_row, _ = self.writer.insert_value2sheet(worksheet, (2 if sheet else self.end_row + 2, self.start_col), value="训练集决策树组合策略", style="header_middle")
+        self.end_row, _ = self.insert_dt_rules(parsed_rules_train, self.end_row, self.start_col, sheet=worksheet)
         outputs = (parsed_rules_train,)
-        
-        if val is not None:
-            parsed_rules_val = self.transform(val)
-            self.end_row, _ = self.writer.insert_value2sheet(self.worksheet, (self.end_row + 2, self.start_col), value="验证集决策树组合策略")
-            self.end_row, _ = self.insert_dt_rules(parsed_rules_val, self.end_row, self.start_col)
-            outputs = outputs + (parsed_rules_val,)
-        
-        if test is not None:
-            parsed_rules_test = self.transform(test)
-            self.end_row, _ = self.writer.insert_value2sheet(self.worksheet, (self.end_row + 2, self.start_col), value="测试集决策树组合策略")
-            self.end_row, _ = self.insert_dt_rules(parsed_rules_test, self.end_row, self.start_col)
-            outputs = outputs + (parsed_rules_test,)
-            
+
+        if len(parsed_rules_train) > 0:
+            if val is not None:
+                parsed_rules_val = self.transform(val)
+                self.end_row, _ = self.writer.insert_value2sheet(worksheet, (self.end_row + 2, self.start_col), value="验证集决策树组合策略", style="header_middle")
+                self.end_row, _ = self.insert_dt_rules(parsed_rules_val, self.end_row, self.start_col, sheet=worksheet)
+                outputs = outputs + (parsed_rules_val,)
+
+            if test is not None:
+                parsed_rules_test = self.transform(test)
+                self.end_row, _ = self.writer.insert_value2sheet(worksheet, (self.end_row + 2, self.start_col), value="测试集决策树组合策略", style="header_middle")
+                self.end_row, _ = self.insert_dt_rules(parsed_rules_test, self.end_row, self.start_col, sheet=worksheet)
+                outputs = outputs + (parsed_rules_test,)
+        else:
+            if val is not None:
+                outputs = outputs + (parsed_rules_train,)
+
+            if test is not None:
+                outputs = outputs + (parsed_rules_train,)
+
         return outputs
-    
-    def save(self):
-        self.writer.save(self.output)
-    
-    @staticmethod
-    def round_float(num):
-        if ~pd.isnull(num) and isinstance(num, float):
-            return float(str(num).split(".")[0] + "." + str(num).split(".")[1][:4])
-        else:
-            return num
 
-    def feature_bins(self, bins):
-        if isinstance(bins, list): bins = np.array(bins)
-        EMPTYBINS = len(bins) if not isinstance(bins[0], (set, list, np.ndarray)) else -1
-
-        l = []
-        if np.issubdtype(bins.dtype, np.number):
-            has_empty = len(bins) > 0 and np.isnan(bins[-1])
-            if has_empty: bins = bins[:-1]
-            sp_l = ["负无穷"] + [self.round_float(b) for b in bins.tolist()] + ["正无穷"]
-            for i in range(len(sp_l) - 1): l.append('['+str(sp_l[i])+' , '+str(sp_l[i+1])+')')
-            if has_empty: l.append('缺失值')
-        else:
-            for keys in bins:
-                keys_update = set()
-                for key in keys:
-                    if pd.isnull(key) or key == "nan":
-                        keys_update.add("缺失值")
-                    elif key.strip() == "":
-                        keys_update.add("空字符串")
-                    else:
-                        keys_update.add(key)
-                label = ','.join(keys_update)
-                l.append(label)
-
-        return {i if b != "缺失值" else EMPTYBINS: b for i, b in enumerate(l)}
-
-    def feature_bin_stats(self, data, feature, rules={}, min_n_bins=2, max_n_bins=3, max_n_prebins=10, min_prebin_size=0.02, min_bin_size=0.05, max_bin_size=None, gamma=0.01, monotonic_trend="auto_asc_desc", desc="", method='chi', verbose=False, ks=False):
-        """简单策略挖掘：特征分箱统计信息
-
-        :param data: 需要进行挖掘的数据集
-        :param feature: 传入需要计算的特征名称
-        :param desc: 特征的中文含义或者其他相关注释内容
-        :param method: 可以选择的分箱方法 ['dt', 'chi', 'quantile', 'step', 'kmeans', 'cart']， 默认为 chi
-        :param min_bin_size: 最小样本占比，默认为 0.05
-        :param max_bin_size: 最大样本占比，传入 None 时不限制，默认为 None
-        :param min_n_bins: 最小分箱数，默认 2
-        :param rules: 自定义分箱规则，默认为 {}
-        :param verbose: 是否开启调试模式，会答应更多东西，默认为 False
-        :param ks: 是否输出特征每个分箱上的分档ks指标，默认为 False
-        :param max_n_prebins: method 为 cart 时支持，预分箱时的最大分箱数，默认 10
-        :param min_prebin_size: method 为 cart 时支持，预分箱时的最小样本占比，默认为 0.02
-        :param max_n_bins: method 为 cart 时支持，最大分箱数，传入 None 时不限制，默认为 3
-        :param gamma: method 为 cart 时支持，正则化参数，默认 0.01
-        :param monotonic_trend: method 为 cart 时支持，特征分箱的模式，支持 optbinning 中的所有 monotonic_trend， 默认 auto_asc_desc，即单增或单减
-
-        :return: pd.DataFrame, 特征分箱的统计信息
-        """
-        if rules is not None and len(rules) > 0:
-            if isinstance(rules, (list, np.ndarray)): rules = {feature: rules}
-            self.combiner.update(rules)
-        else:
-            if method not in ['dt', 'chi', 'quantile', 'step', 'kmeans', 'cart']:
-                raise "method is the one of ['dt', 'chi', 'quantile', 'step', 'kmeans', 'cart']"
-
-            if data[feature].dropna().nunique() <= min_n_bins:
-                splits = []
-                for v in data[feature].dropna().unique():
-                    splits.append(v)
-
-                if str(data[feature].dtypes) in ["object", "string", "category"]:
-                    rule = {feature: [[s] for s in splits]}
-                    rule[feature].append([[np.nan]])
-                else:
-                    rule = {feature: sorted(splits) + [np.nan]}
-            else:
-                if method == "cart":
-                    y = data[self.target]
-                    if str(data[feature].dtypes) in ["object", "string", "category"]:
-                        dtype = "categorical"
-                        x = data[feature].astype("category").values
-                    else:
-                        dtype = "numerical"
-                        x = data[feature].values
-
-                    _combiner = OptimalBinning(feature, dtype=dtype, min_n_bins=min_n_bins, max_n_bins=max_n_bins, max_n_prebins=max_n_prebins, min_prebin_size=min_prebin_size, min_bin_size=min_bin_size, max_bin_size=max_bin_size, monotonic_trend=monotonic_trend, gamma=gamma).fit(x, y)
-                    if _combiner.status == "OPTIMAL":
-                        rule = {feature: [s.tolist() if isinstance(s, np.ndarray) else s for s in _combiner.splits] + [[np.nan] if dtype == "categorical" else np.nan]}
-                    else:
-                        _combiner = toad.transform.Combiner()
-                        _combiner.fit(data[[feature, self.target]].dropna(), self.target, method="chi", min_samples=min_bin_size, n_bins=max_n_bins)
-                        rule = {feature: [s.tolist() if isinstance(s, np.ndarray) else s for s in _combiner[feature]] + [[np.nan] if dtype == "categorical" else np.nan]}
-                else:
-                    _combiner = toad.transform.Combiner()
-                    if method in ("step", "quantile"):
-                        _combiner.fit(data[[feature, self.target]].dropna(), self.target, method=method, n_bins=max_n_bins)
-                    else:
-                        _combiner.fit(data[[feature, self.target]].dropna(), self.target, method=method, min_samples=min_bin_size, n_bins=max_n_bins)
-                    rule = {feature: [s.tolist() if isinstance(s, np.ndarray) else s for s in _combiner[feature]] + [[np.nan] if str(data[feature].dtypes) in ["object", "string", "category"] else np.nan]}
-
-            self.combiner.update(rule)
-        
-        if verbose:
-            print(data[feature].describe())
-
-        feature_bin_dict = self.feature_bins(np.array(self.combiner[feature]))
-        df_bin = self.combiner.transform(data[[feature, self.target]], labels=False)
-        
-        table = df_bin[[feature, self.target]].groupby([feature, self.target]).agg(len).unstack()
-        table.columns.name = None
-        table = table.rename(columns = {0 : '好样本数', 1 : '坏样本数'}).fillna(0)
-        if "好样本数" not in table.columns:
-            table["好样本数"] = 0
-        if "坏样本数" not in table.columns:
-            table["坏样本数"] = 0
-        
-        table["指标名称"] = feature
-        table["指标含义"] = desc
-        table = table.reset_index().rename(columns={feature: "分箱", "index": "分箱"})
-
-        table['样本总数'] = table['好样本数'] + table['坏样本数']
-        table['样本占比'] = table['样本总数'] / table['样本总数'].sum()
-        table['好样本占比'] = table['好样本数'] / table['好样本数'].sum()
-        table['坏样本占比'] = table['坏样本数'] / table['坏样本数'].sum()
-        table['坏样本率'] = table['坏样本数'] / table['样本总数']
-        
-        table = table.fillna(0.)
-        
-        table['分档WOE值'] = table.apply(lambda x : np.log(x['好样本占比'] / (x['坏样本占比'] + 1e-6)),axis=1)
-        table['分档IV值'] = table.apply(lambda x : (x['好样本占比'] - x['坏样本占比']) * np.log(x['好样本占比'] / (x['坏样本占比'] + 1e-6)), axis=1)
-        
-        table = table.replace(np.inf, 0).replace(-np.inf, 0)
-        
-        table['指标IV值'] = table['分档IV值'].sum()
-        
-        table["LIFT值"] = table['坏样本率'] / (table["坏样本数"].sum() / table["样本总数"].sum())
-        table["累积LIFT值"] = (table['坏样本数'].cumsum() / table['样本总数'].cumsum()) / (table["坏样本数"].sum() / table["样本总数"].sum())
-        
-        if ks:
-            table = table.sort_values("分箱")
-            table["累积好样本数"] = table["好样本数"].cumsum()
-            table["累积坏样本数"] = table["坏样本数"].cumsum()
-            table["分档KS值"] = table["累积坏样本数"] / table['坏样本数'].sum() - table["累积好样本数"] / table['好样本数'].sum()
-        
-        table["分箱"] = table["分箱"].map(feature_bin_dict)
-        table = table.set_index(['指标名称', '指标含义', '分箱']).reindex([(feature, desc, b) for b in feature_bin_dict.values()]).fillna(0).reset_index()
-        
-        if ks:
-            return table[['指标名称', "指标含义", '分箱', '样本总数', '样本占比', '好样本数', '好样本占比', '坏样本数', '坏样本占比', '坏样本率', '分档WOE值', '分档IV值', '指标IV值', 'LIFT值', '累积LIFT值', '累积好样本数', '累积坏样本数', '分档KS值']]
-        else:
-            return table[['指标名称', "指标含义", '分箱', '样本总数', '样本占比', '好样本数', '好样本占比', '坏样本数', '坏样本占比', '坏样本率', '分档WOE值', '分档IV值', '指标IV值', 'LIFT值', '累积LIFT值']]
-
-    @staticmethod
-    def bin_plot(feature_table, desc="", figsize=(10, 6), colors=["#2639E9", "#F76E6C", "#FE7715"], max_len=35, save=None):
-        """简单策略挖掘：特征分箱图
-
-        :param feature_table: 特征分箱的统计信息表，由 feature_bin_stats 运行得到
-        :param desc: 特征中文含义或者其他相关信息
-        :param figsize: 图像尺寸大小，传入一个tuple，默认 （10， 6）
-        :param colors: 图片主题颜色，默认即可
-        :param save: 图片保存路径
-
-        :return Figure
-        """
-        feature_table = feature_table.copy()
-
-        feature_table["分箱"] = feature_table["分箱"].apply(lambda x: x if re.match("^\[.*\)$", x) else str(x)[:max_len] + "..")
-
-        fig, ax1 = plt.subplots(figsize=figsize)
-        ax1.barh(feature_table['分箱'], feature_table['好样本数'], color=colors[0], label='好样本', hatch="/")
-        ax1.barh(feature_table['分箱'], feature_table['坏样本数'], left=feature_table['好样本数'], color=colors[1], label='坏样本', hatch="\\")
-        ax1.set_xlabel('样本数')
-
-        ax2 = ax1.twiny()
-        ax2.plot(feature_table['坏样本率'], feature_table['分箱'], colors[2], label='坏样本率', linestyle='-.')
-        ax2.set_xlabel('坏样本率: 坏样本数 / 样本总数')
-
-        for i, rate in enumerate(feature_table['坏样本率']):
-            ax2.scatter(rate, i, color=colors[2])
-
-        for i, v in feature_table[['样本总数', '好样本数', '坏样本数', '坏样本率']].iterrows():
-            ax1.text(v['样本总数'] / 2, i + len(feature_table) / 60, f"{int(v['好样本数'])}:{int(v['坏样本数'])}:{v['坏样本率']:.2%}")
-
-        ax1.invert_yaxis()
-
-        fig.suptitle(f'{desc}分箱图\n\n')
-
-        handles1, labels1 = ax1.get_legend_handles_labels()
-        handles2, labels2 = ax2.get_legend_handles_labels()
-        fig.legend(handles1 + handles2, labels1 + labels2, loc='upper center', ncol=len(labels1 + labels2), bbox_to_anchor=(0.5, 0.94), frameon=False)
-
-        plt.tight_layout()
-
-        if save:
-            if os.path.dirname(save) and not os.path.exists(os.path.dirname(save)):
-                os.makedirs(os.path.dirname(save))
-
-            fig.savefig(save, dpi=240, format="png", bbox_inches="tight")
-
-        return fig
-            
-    def query_feature_rule(self, data, feature, desc="", bin_plot=False, figsize=(10, 6), save=None, *args, **kwargs):
+    def query_feature_rule(self, data, feature, desc="", plot=False, figsize=(10, 6), save=None, *args, **kwargs):
         """传入数据集和其中一个特征名称，输出简单策略挖掘统计信息
 
         :param data: 数据集
@@ -555,12 +355,19 @@ class ParseDecisionTreeRules:
 
         :return: pd.DataFrame, 特征分箱的统计信息
         """
-        feature_table = self.feature_bin_stats(data, feature, desc=desc, *args, **kwargs)
-        
-        if bin_plot:
-            self.bin_plot(feature_table, desc=desc, figsize=figsize, save=save)
-        
+        feature_table = feature_bin_stats(data, feature, desc=desc, *args, **kwargs)
+
+        if plot:
+            bin_plot(feature_table, desc=desc, figsize=figsize, save=save)
+
         return feature_table
+    
+    @staticmethod
+    def bin_plot(*args, **kwargs):
+        bin_plot(*args, **kwargs)
+
+    def save(self, output="model_report/决策树组合策略挖掘.xlsx"):
+        self.writer.save(output)
 
 
 if __name__ == '__main__':
@@ -568,22 +375,21 @@ if __name__ == '__main__':
     import pandas as pd
     from sklearn.model_selection import train_test_split
 
-
     feature_map = {}
     n_samples = 10000
     ab = np.array(list('ABCDEFG'))
 
     data = pd.DataFrame({
-        'A': np.random.randint(10, size = n_samples),
+        'A': np.random.randint(10, size=n_samples),
         'B': ab[np.random.choice(7, n_samples)],
         'C': ab[np.random.choice(2, n_samples)],
-        'D': np.random.random(size = n_samples),
-        'target': np.random.randint(2, size = n_samples)
+        'D': np.random.random(size=n_samples),
+        'target': np.random.randint(2, size=n_samples)
     })
 
     train, test = train_test_split(data, test_size=0.3, shuffle=data["target"])
 
     pdtr = ParseDecisionTreeRules(target="target", feature_map=feature_map, max_iter=8)
-    pdtr.fit(train, lift=3., max_depth=2, max_samples=0.1, verbose=False, min_samples_split=8, min_samples_leaf=5, max_features="auto")
+    pdtr.fit(train, lift=1., max_depth=2, max_samples=0.5, verbose=False, min_samples_split=8, min_samples_leaf=5, max_features="auto")
     pdtr.insert_all_rules(test=test)
     pdtr.save()

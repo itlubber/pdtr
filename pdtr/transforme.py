@@ -190,6 +190,12 @@ class ParseDecisionTreeRules:
                     drawing = svg2rlg("combine_rules_cache.svg")
                     renderPDF.drawToFile(drawing, save, dpi=240, fmt="PNG")
 
+        if os.path.isfile("combine_rules_cache.svg"):
+            os.remove("combine_rules_cache.svg")
+        
+        if os.path.isfile("combine_rules_cache"):
+            os.remove("combine_rules_cache")
+        
         if drop:
             if len(rules) > 0:
                 return rules, decision_tree.feature_names_in_[list(decision_tree.feature_importances_).index(max(decision_tree.feature_importances_))], total_rules

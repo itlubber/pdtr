@@ -13,13 +13,13 @@ import dtreeviz
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
+from matplotlib import font_manager
 from openpyxl.worksheet.worksheet import Worksheet
 
-import toad
 import category_encoders as ce
 from optbinning import OptimalBinning
 from sklearn.tree import DecisionTreeClassifier
-from scorecardpipeline import ExcelWriter, get_column_letter, init_setting, Combiner, feature_bin_stats, bin_plot, dataframe2excel
+from scorecardpipeline import ExcelWriter, Combiner, feature_bin_stats, bin_plot, dataframe2excel
 
 
 class ParseDecisionTreeRules:
@@ -37,13 +37,13 @@ class ParseDecisionTreeRules:
         :param combiner: 可以传入提前训练好的 combiner，支持 toad.transform.Combiner 和 笔者重写的 Combiner
         """
         self.seed = seed
-        self.theme_color = theme_color
+        self.nan = nan
         self.target = target
         self.labels = labels
+        self.theme_color = theme_color
         self.feature_map = feature_map
-        self.nan = nan
-        self.max_iter = max_iter
         self.decision_trees = []
+        self.max_iter = max_iter
         if combiner:
             self.combiner = combiner
         else:
@@ -55,12 +55,28 @@ class ParseDecisionTreeRules:
         self.start_col = 2
         self.describe_columns = ["组合策略", "命中数", "命中率", "好样本数", "好样本占比", "坏样本数", "坏样本占比", "坏率", "样本整体坏率", "LIFT值"]
 
-        init_setting(seed=self.seed)
+        self.init_setting()
 
         if writer:
             self.writer = writer
         else:
             self.writer = ExcelWriter(theme_color=self.theme_color)
+    
+    @staticmethod
+    def init_setting(font_path=None):
+        if "seaborn-ticks" in plt.style.available:
+            plt.style.use('seaborn-ticks')
+        else:
+            plt.style.use('seaborn-v0_8-ticks')
+
+        font_path = font_path or os.path.join(os.path.dirname(os.path.abspath(__file__)), 'matplot_chinese.ttf')
+        if not os.path.isfile(font_path):
+            import wget
+            font_path = wget.download("https://itlubber.art/upload/matplot_chinese.ttf", os.path.join(os.path.dirname(os.path.abspath(__file__)), 'matplot_chinese.ttf'))
+
+        font_manager.fontManager.addfont(font_path)
+        plt.rcParams['font.family'] = font_manager.FontProperties(fname=font_path).get_name()
+        plt.rcParams['axes.unicode_minus'] = False
 
     def encode_cat_features(self, X, y):
         cat_features = list(set(X.select_dtypes(include=[object, pd.CategoricalDtype]).columns))
@@ -146,11 +162,16 @@ class ParseDecisionTreeRules:
                                        class_names=labels,
                                        )
         except AttributeError:
-            print("请检查 dtreeviz 版本")
+            raise "请检查 dtreeviz 版本"
 
         rules = rules.query(f"LIFT值 >= {lift} & 命中率 <= {max_samples}").reset_index(drop=True)
 
         if len(rules) > 0:
+            font_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'matplot_chinese.ttf')
+            font_manager.fontManager.addfont(font_path)
+            plt.rcParams['font.family'] = font_manager.FontProperties(fname=font_path).get_name()
+            plt.rcParams['axes.unicode_minus'] = False
+
             decision_tree_viz = viz_model.view(
                 scale=1.5,
                 orientation='LR',
@@ -164,6 +185,7 @@ class ParseDecisionTreeRules:
                 },
                 ticks_fontsize=10,
                 label_fontsize=10,
+                fontname=plt.rcParams['font.family'],
             )
             if verbose:
                 from IPython.core.display_functions import display

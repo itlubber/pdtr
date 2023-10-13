@@ -163,3 +163,4 @@ cython_debug/
 *.DS_Store
 *.pkl
 *.virtual_documents
+test.*
